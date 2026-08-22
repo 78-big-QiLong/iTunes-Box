@@ -180,10 +180,11 @@ static pid_t global_bg_idfa_light_pid = 0;
     if (htmlPath) {
         NSData *htmlData = [NSData dataWithContentsOfFile:htmlPath];
         if (htmlData && htmlData.length > 0) {
-            // 使用 about:blank 作为 baseURL，彻底切断 WebKit 对 /var/jb 等越狱本地路径的 Origin 沙盒审查
-            NSURL *dummyURL = [NSURL URLWithString:@"about:blank"];
+            // 使用标准的 HTTP localhost 作为 baseURL，既能欺骗 WebKit 沙盒（绕过越狱路径读取限制），
+            // 又能赋予完整的源(Origin)权限，防止 about:blank 导致的 inline CSS/JS 被 CSP 拦截（白屏不完整）。
+            NSURL *dummyURL = [NSURL URLWithString:@"http://localhost/"];
             [self.webView loadData:htmlData MIMEType:@"text/html" characterEncodingName:@"UTF-8" baseURL:dummyURL];
-            NSLog(@"[MAIN] Loaded index.html via raw NSData directly into WKWebView.");
+            NSLog(@"[MAIN] Loaded index.html via raw NSData with localhost dummy baseURL.");
         } else {
             NSLog(@"[MAIN] Error: htmlData is nil or empty.");
         }
