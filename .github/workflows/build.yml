@@ -53,6 +53,11 @@ jobs:
           chmod 0755 Payload/QiLong-Dynamic-Whitelist.app/QiLong-Dynamic-Whitelist
           chmod 0755 Payload/QiLong-Dynamic-Whitelist.app/RootHelper
           
+          # 清理扩展属性
+          xattr -cr Payload/ || true
+          find Payload/ -name ".DS_Store" -delete
+          find Payload/ -name "__MACOSX" -exec rm -rf {} + 2>/dev/null || true
+          
           # 使用 -0 纯存储模式打包，完全不进行 Deflate 压缩
           zip -0 -qr QiLong-Dynamic-Whitelist.ipa Payload
           cp -f QiLong-Dynamic-Whitelist.ipa QiLong-Dynamic-Whitelist.tipa
@@ -93,11 +98,20 @@ jobs:
           # 使用 -Znone 无压缩打包 DEB
           dpkg-deb -Znone --root-owner-group -b build_deb QiLong-Dynamic-Whitelist_rootless.deb
 
-      - name: 8. 上传无加固无压缩产物
+      - name: 8. 上传 TIPA 安装包 (供 TrollStore)
         uses: actions/upload-artifact@v4
         with:
-          name: QiLong-NoHardening-Uncompressed-Release
-          path: |
-            QiLong-Dynamic-Whitelist.ipa
-            QiLong-Dynamic-Whitelist.tipa
-            QiLong-Dynamic-Whitelist_rootless.deb
+          name: QiLong-Dynamic-Whitelist-TIPA
+          path: QiLong-Dynamic-Whitelist.tipa
+
+      - name: 9. 上传 IPA 安装包 (供自签)
+        uses: actions/upload-artifact@v4
+        with:
+          name: QiLong-Dynamic-Whitelist-IPA
+          path: QiLong-Dynamic-Whitelist.ipa
+
+      - name: 10. 上传 DEB 安装包 (供越狱环境)
+        uses: actions/upload-artifact@v4
+        with:
+          name: QiLong-Dynamic-Whitelist-DEB
+          path: QiLong-Dynamic-Whitelist_rootless.deb

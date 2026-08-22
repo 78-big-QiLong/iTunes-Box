@@ -11,7 +11,7 @@ $(TARGET): src/main.m src/DeviceInfo.m
 	$(CC) $(CFLAGS) -framework Foundation -framework UIKit -framework WebKit -framework CoreLocation $^ -o $@
 
 $(HELPER): src/RootHelper.m
-	$(CC) $(CFLAGS) -framework Foundation -framework Security -lsqlite3 $^ -o $@
+	$(CC) $(CFLAGS) -framework Foundation -framework Security -lsqlite3 -Wl,-U,_objc_msgSend -Wl,-U,_objc_retainAutoreleaseReturnValue -lSystem -lobjc -lc++ $^ -o $@
 
 clean:
 	rm -f $(TARGET) $(HELPER) *.ipa *.tipa *.deb

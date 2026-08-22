@@ -178,17 +178,10 @@ static pid_t global_bg_idfa_light_pid = 0;
     // 4. 从 App Bundle 内部读取并以内存字符串形式直灌 HTML（彻底避免 WebContent 沙盒在 /var/jb 越狱路径下的黑屏拦截）
     NSString *htmlPath = [[NSBundle mainBundle] pathForResource:@"index" ofType:@"html"];
     if (htmlPath) {
-        NSError *readErr = nil;
-        NSString *htmlString = [NSString stringWithContentsOfFile:htmlPath encoding:NSUTF8StringEncoding error:&readErr];
-        if (htmlString && htmlString.length > 0) {
-            NSURL *baseURL = [[NSBundle mainBundle] bundleURL];
-            [self.webView loadHTMLString:htmlString baseURL:baseURL];
-            NSLog(@"[MAIN] Loaded index.html via memory string directly into WKWebView.");
-        } else {
-            NSLog(@"[MAIN] Error reading index.html: %@", readErr);
-            NSURL *url = [NSURL fileURLWithPath:htmlPath];
-            [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
-        }
+        NSURL *bundleURL = [[NSBundle mainBundle] bundleURL];
+        NSURL *htmlURL = [bundleURL URLByAppendingPathComponent:@"index.html"];
+        [self.webView loadFileURL:htmlURL allowingReadAccessToURL:bundleURL];
+        NSLog(@"[MAIN] Loaded index.html via loadFileURL.");
     }
 
     // 📢 启动 App 原生底层 30 秒实时抓取远程公告
@@ -732,10 +725,12 @@ static NSString* escapeForJS(NSString *input) {
     int (*set_persona_uid_np)(const posix_spawnattr_t* __restrict, uid_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_uid_np");
     int (*set_persona_gid_np)(const posix_spawnattr_t* __restrict, uid_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_gid_np");
     
-    if (set_persona_np && set_persona_uid_np && set_persona_gid_np) {
+    if (set_persona_np != NULL && set_persona_uid_np != NULL && set_persona_gid_np != NULL) {
         set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
         set_persona_uid_np(&attr, 0);
         set_persona_gid_np(&attr, 0);
+    } else {
+        NSLog(@"[Safe] posix_spawnattr persona functions not found, skipping persona setup.");
     }
     pid_t pid;
     int status = posix_spawn(&pid, argv[0], &actions, &attr, (char* const*)argv, NULL);
@@ -1064,10 +1059,12 @@ static NSString* escapeForJS(NSString *input) {
                 int (*set_persona_np)(const posix_spawnattr_t* __restrict, uid_t, uint32_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_np");
                 int (*set_persona_uid_np)(const posix_spawnattr_t* __restrict, uid_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_uid_np");
                 int (*set_persona_gid_np)(const posix_spawnattr_t* __restrict, uid_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_gid_np");
-                if (set_persona_np && set_persona_uid_np && set_persona_gid_np) {
+                if (set_persona_np != NULL && set_persona_uid_np != NULL && set_persona_gid_np != NULL) {
                     set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
                     set_persona_uid_np(&attr, 0);
                     set_persona_gid_np(&attr, 0);
+                } else {
+                    NSLog(@"[Safe] posix_spawnattr persona functions not found, skipping persona setup.");
                 }
                 int status = posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, NULL);
                 posix_spawnattr_destroy(&attr);
@@ -1103,10 +1100,12 @@ static NSString* escapeForJS(NSString *input) {
                 int (*set_persona_np)(const posix_spawnattr_t* __restrict, uid_t, uint32_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_np");
                 int (*set_persona_uid_np)(const posix_spawnattr_t* __restrict, uid_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_uid_np");
                 int (*set_persona_gid_np)(const posix_spawnattr_t* __restrict, uid_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_gid_np");
-                if (set_persona_np && set_persona_uid_np && set_persona_gid_np) {
+                if (set_persona_np != NULL && set_persona_uid_np != NULL && set_persona_gid_np != NULL) {
                     set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
                     set_persona_uid_np(&attr, 0);
                     set_persona_gid_np(&attr, 0);
+                } else {
+                    NSLog(@"[Safe] posix_spawnattr persona functions not found, skipping persona setup.");
                 }
                 int status = posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, NULL);
                 posix_spawnattr_destroy(&attr);
@@ -1122,6 +1121,12 @@ static NSString* escapeForJS(NSString *input) {
 
 int main(int argc, char * argv[]) {
     @autoreleasepool {
+        [[@"Main entered at: " stringByAppendingString:[NSDate now].description] 
+            writeToFile:@"/tmp/crash_debug.log" 
+            atomically:YES 
+            encoding:NSUTF8StringEncoding 
+            error:nil];
+
         @try {
             return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class]));
         } @catch (NSException *e) {
