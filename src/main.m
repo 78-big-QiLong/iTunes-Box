@@ -178,10 +178,17 @@ static pid_t global_bg_idfa_light_pid = 0;
     // 4. 从 App Bundle 内部读取并以内存字符串形式直灌 HTML（彻底避免 WebContent 沙盒在 /var/jb 越狱路径下的黑屏拦截）
     NSString *htmlPath = [[NSBundle mainBundle] pathForResource:@"index" ofType:@"html"];
     if (htmlPath) {
-        NSURL *bundleURL = [[NSBundle mainBundle] bundleURL];
-        NSURL *htmlURL = [bundleURL URLByAppendingPathComponent:@"index.html"];
-        [self.webView loadFileURL:htmlURL allowingReadAccessToURL:bundleURL];
-        NSLog(@"[MAIN] Loaded index.html via loadFileURL.");
+        NSError *readErr = nil;
+        NSString *htmlString = [NSString stringWithContentsOfFile:htmlPath encoding:NSUTF8StringEncoding error:&readErr];
+        if (htmlString && htmlString.length > 0) {
+            NSURL *baseURL = [[NSBundle mainBundle] bundleURL];
+            [self.webView loadHTMLString:htmlString baseURL:baseURL];
+            NSLog(@"[MAIN] Loaded index.html via memory string directly into WKWebView.");
+        } else {
+            NSLog(@"[MAIN] Error reading index.html: %@", readErr);
+            NSURL *url = [NSURL fileURLWithPath:htmlPath];
+            [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+        }
     }
 
     // 📢 启动 App 原生底层 30 秒实时抓取远程公告
