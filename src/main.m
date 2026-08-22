@@ -171,9 +171,14 @@ static pid_t global_bg_idfa_light_pid = 0;
     // 拦截系统级手势（如iPad上方三点分屏按钮触发的下滑手势）
     self.webView.scrollView.scrollEnabled = NO;
     self.webView.scrollView.bounces = NO;
-    // 设置自动调整mask，配合viewDidLayoutSubviews共同保障横竖屏切换时布局正确
-    self.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.webView.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.webView];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.webView.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.webView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [self.webView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [self.webView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor]
+    ]];
     
     // 4. 从 App Bundle 内部读取并以内存字符串形式直灌 HTML（彻底避免 WebContent 沙盒在 /var/jb 越狱路径下的黑屏拦截）
     NSString *htmlPath = [[NSBundle mainBundle] pathForResource:@"index" ofType:@"html"];
