@@ -179,14 +179,20 @@ static pid_t global_bg_idfa_light_pid = 0;
     NSString *htmlPath = [[NSBundle mainBundle] pathForResource:@"index" ofType:@"html"];
     if (htmlPath) {
         NSData *htmlData = [NSData dataWithContentsOfFile:htmlPath];
-        if (htmlData && htmlData.length > 0) {
-            // 使用标准的 HTTP localhost 作为 baseURL，既能欺骗 WebKit 沙盒（绕过越狱路径读取限制），
-            // 又能赋予完整的源(Origin)权限，防止 about:blank 导致的 inline CSS/JS 被 CSP 拦截（白屏不完整）。
-            NSURL *dummyURL = [NSURL URLWithString:@"http://localhost/"];
-            [self.webView loadData:htmlData MIMEType:@"text/html" characterEncodingName:@"UTF-8" baseURL:dummyURL];
-            NSLog(@"[MAIN] Loaded index.html via raw NSData with localhost dummy baseURL.");
+        if (htmlData) {
+            NSString *htmlString = [[NSString alloc] initWithData:htmlData encoding:NSUTF8StringEncoding];
+            if (!htmlString) {
+                // Fallback encoding if file has BOM or invalid UTF-8 bytes
+                htmlString = [[NSString alloc] initWithData:htmlData encoding:NSASCIIStringEncoding];
+            }
+            if (htmlString) {
+                // 使用 HTTP localhost 作为 baseURL 防止 CSP 拦截 inline 样式，同时确保 WebKit 正常渲染 HTML
+                NSURL *dummyURL = [NSURL URLWithString:@"http://localhost/"];
+                [self.webView loadHTMLString:htmlString baseURL:dummyURL];
+                NSLog(@"[MAIN] Loaded index.html via loadHTMLString with dummy baseURL.");
+            }
         } else {
-            NSLog(@"[MAIN] Error: htmlData is nil or empty.");
+            NSLog(@"[MAIN] Error: htmlData is nil.");
         }
     }
 
