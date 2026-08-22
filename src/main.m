@@ -180,7 +180,6 @@ static pid_t global_bg_idfa_light_pid = 0;
         [self.webView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor]
     ]];
     
-    // 4. 从 App Bundle 内部读取并以内存字符串形式直灌 HTML（彻底避免 WebContent 沙盒在 /var/jb 越狱路径下的黑屏拦截）
     NSString *htmlPath = [[NSBundle mainBundle] pathForResource:@"index" ofType:@"html"];
     if (htmlPath) {
         NSData *htmlData = [NSData dataWithContentsOfFile:htmlPath];
@@ -191,10 +190,13 @@ static pid_t global_bg_idfa_light_pid = 0;
                 htmlString = [[NSString alloc] initWithData:htmlData encoding:NSASCIIStringEncoding];
             }
             if (htmlString) {
-                // 使用 HTTP localhost 作为 baseURL 防止 CSP 拦截 inline 样式，同时确保 WebKit 正常渲染 HTML
-                NSURL *dummyURL = [NSURL URLWithString:@"http://localhost/"];
+                // 使用 App 自身的 NSTemporaryDirectory() 作为 baseURL。
+                // 1. 这是合法的 Sandbox 容器路径，不会触发 Dopamine /var/jb 越狱路径的沙盒拦截（解决黑屏）。
+                // 2. 它是 file:// 协议，不会被 ATS (App Transport Security) 拦截（解决 http://localhost/ 白屏）。
+                // 3. 它不是 about:blank，所以 CSP 不会拦截内联样式和脚本（解决纯白无样式显示不全）。
+                NSURL *dummyURL = [NSURL fileURLWithPath:NSTemporaryDirectory()];
                 [self.webView loadHTMLString:htmlString baseURL:dummyURL];
-                NSLog(@"[MAIN] Loaded index.html via loadHTMLString with dummy baseURL.");
+                NSLog(@"[MAIN] Loaded index.html via loadHTMLString with dummy file:// baseURL.");
             }
         } else {
             NSLog(@"[MAIN] Error: htmlData is nil.");
