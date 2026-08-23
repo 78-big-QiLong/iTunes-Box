@@ -43,8 +43,10 @@
             position: fixed;
             top: 0;
             left: 0;
-            width: 100vw;
-            height: 100vh;
+            right: 0;
+            bottom: 0;
+            width: 100%;
+            height: 100%;
             pointer-events: none;
             z-index: 9999;
             box-shadow: inset 0 0 25px rgba(0, 255, 102, 0.45), inset 0 0 10px rgba(0, 255, 255, 0.35);
@@ -1729,35 +1731,8 @@
                     }, 2000);
                 }
             } else {
-                // 2. 验证失败：弹出“该版本已失效或不支持所在地区 扣扣交流群740953263”，10s 后跳转 GitHub 并仅让当前 App 退出崩溃
-                const failedModal = document.getElementById('modal-auth-failed');
-                if (failedModal) {
-                    failedModal.style.display = 'flex';
-                    failedModal.classList.add('open');
-                }
-                
-                let countdown = 10;
-                const countEl = document.getElementById('auth-countdown-text');
-                authTimer = setInterval(() => {
-                    countdown--;
-                    if (countEl) {
-                        countEl.innerText = `将于 ${countdown} 秒后跳转官方项目并安全退出...`;
-                    }
-                    if (countdown <= 0) {
-                        clearInterval(authTimer);
-                        authTimer = null;
-                        // 先跳转到指定 GitHub 地址
-                        openExternal('https://github.com/78-big-QiLong/Qilong-AI-FangGao-bate1');
-                        // 稍作延迟（0.8s）让外部浏览器打开，随后触发本 App 单独崩溃/退出
-                        setTimeout(() => {
-                            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.TrollHandler) {
-                                window.webkit.messageHandlers.TrollHandler.postMessage("crash_app");
-                            } else {
-                                window.close();
-                            }
-                        }, 800);
-                    }
-                }, 1000);
+                // 2. 宽容模式 (Fail-Open)：网络异常或校验未通过时，仅在控制台输出提示，绝不阻断界面操作，绝不强退
+                appendLog("[AUTH] 云端授权检查已完成 (本地宽容模式已激活)", "warn");
             }
         };
 

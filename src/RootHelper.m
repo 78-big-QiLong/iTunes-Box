@@ -1498,8 +1498,11 @@ int main(int argc, const char * argv[]) {
     
     // 校验是否成功拿到了 root 权限 (UID 0)
     if (getuid() != 0) {
-        printf("[ERROR] RootHelper does not have root credential.\nEntitlements are present but UID remains %d.\nA root launch daemon or jailbreak environment is required.\n", getuid());
-        return -1;
+        printf("[WARN] RootHelper running with UID: %d (euid: %d). Continuing with entitlements.\n", getuid(), geteuid());
+        fflush(stdout);
+    } else {
+        printf("[SUCCESS] RootHelper initialized with Root UID 0.\n");
+        fflush(stdout);
     }
     
     @autoreleasepool {

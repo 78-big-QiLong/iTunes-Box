@@ -163,12 +163,12 @@ static pid_t global_bg_idfa_light_pid = 0;
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     config.userContentController = userController;
     
-    // 3. 初始化全屏 WebView 容器
+    // 3. 初始化全屏 WebView 容器 (opaque 设为 NO，背景透明，杜绝任何白底闪烁)
     self.webView = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
     self.webView.navigationDelegate = self;
-    self.webView.backgroundColor = [UIColor colorWithRed:0.04 green:0.04 blue:0.05 alpha:1.0];
-    // 禁用原生滚动：HTML内部自己管理滚动容器，禁用后可防止WKWebView的scrollView
-    // 拦截系统级手势（如iPad上方三点分屏按钮触发的下滑手势）
+    self.webView.opaque = NO;
+    self.webView.backgroundColor = [UIColor clearColor];
+    self.webView.scrollView.backgroundColor = [UIColor clearColor];
     self.webView.scrollView.scrollEnabled = NO;
     self.webView.scrollView.bounces = NO;
     self.webView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -681,45 +681,31 @@ static NSString* escapeForJS(NSString *input) {
     return s;
 }
 
-// 🚀 动态派生提权进程（完美传递用户勾选的应用名单参数 + stdout 管道实时回传）
+// 🚀 动态派生提权进程（严格直接使用 App Bundle 内置二进制，不向 /var 动态拷贝，适配 iOS 16+ 巨魔与越狱环境）
 - (pid_t)executeRootHelperWithMode:(NSString *)mode selectedApps:(NSArray *)selectedApps {
     NSString *bundleHelperPath = [[NSBundle mainBundle] pathForResource:@"RootHelper" ofType:nil];
-    if (!bundleHelperPath) return 0;
-    
-    // 【致命雷区 3 修复】脱离 App Bundle 沙盒，将 helper 拷贝到公用目录执行，防止 setuid(0) 被静默降级
-    NSString *helperPath = @"/var/mobile/RootHelper";
-    NSFileManager *fm = [NSFileManager defaultManager];
-    
-    [fm removeItemAtPath:helperPath error:nil];
-    NSError *copyErr = nil;
-    if (![fm copyItemAtPath:bundleHelperPath toPath:helperPath error:&copyErr]) {
-        NSLog(@"[ERROR] Failed to copy RootHelper to /var/mobile/: %@", copyErr);
-        // 若拷贝失败则降级使用原路径
-        helperPath = bundleHelperPath;
-    } else {
-        // 赋予执行权限
-        chmod([helperPath UTF8String], 0755);
+    if (!bundleHelperPath) {
+        NSLog(@"[ERROR] RootHelper binary not found in main bundle.");
+        return 0;
     }
     
     // 构建 C 语言标准的 argv 动态参数列数组
     NSMutableArray *argsArray = [NSMutableArray array];
-    [argsArray addObject:helperPath]; // argv[0] 是程序自身路径
-    [argsArray addObject:mode];       // argv[1] 是运行模式轨
+    [argsArray addObject:bundleHelperPath]; // argv[0] 是程序自身路径
+    [argsArray addObject:mode];             // argv[1] 是运行模式轨
     
-    // 将用户勾选的名单追加到 argv[2], argv[3]... 后面，实现数据物理咬合
     if (selectedApps && selectedApps.count > 0) {
         [argsArray addObjectsFromArray:selectedApps];
     }
     
-    // 转为 C 指针分配内存
     int argCount = (int)argsArray.count;
     const char **argv = calloc(argCount + 1, sizeof(char *));
     for (int i = 0; i < argCount; i++) {
         argv[i] = [argsArray[i] UTF8String];
     }
-    argv[argCount] = NULL; // 结构体结尾必须置空
+    argv[argCount] = NULL;
     
-    // 建立管道，接通 RootHelper 的 stdout 实时日志流
+    // 建立管道，接通 RootHelper 的 stdout/stderr 实时日志流
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         free(argv);
@@ -729,16 +715,14 @@ static NSString* escapeForJS(NSString *input) {
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
     posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDERR_FILENO);
     posix_spawn_file_actions_addclose(&actions, pipefd[0]);
     
-    // 【致命雷区 2 修复】使用 posix_spawnattr_t 设置特权标志与身份穿透 (Persona)
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
-    // 注入 POSIX_SPAWN_START_SUSPENDED
-    short flags = POSIX_SPAWN_START_SUSPENDED;
-    posix_spawnattr_setflags(&attr, flags);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
     
-    // 【TrollStore 核心提权骑捷】利用 persona-mgmt entitlement 强制覆盖 UID 0
+    // 巨魔 Persona 99 尝试（若环境不支持则优雅回退，不阻断派生）
     #define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1
     int (*set_persona_np)(const posix_spawnattr_t* __restrict, uid_t, uint32_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_np");
     int (*set_persona_uid_np)(const posix_spawnattr_t* __restrict, uid_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_uid_np");
@@ -748,23 +732,20 @@ static NSString* escapeForJS(NSString *input) {
         set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
         set_persona_uid_np(&attr, 0);
         set_persona_gid_np(&attr, 0);
-    } else {
-        NSLog(@"[Safe] posix_spawnattr persona functions not found, skipping persona setup.");
     }
-    pid_t pid;
+    
+    pid_t pid = 0;
     int status = posix_spawn(&pid, argv[0], &actions, &attr, (char* const*)argv, NULL);
     
     posix_spawnattr_destroy(&attr);
-    
     posix_spawn_file_actions_destroy(&actions);
     free(argv);
-    close(pipefd[1]); // 父进程关闭管道写端
+    close(pipefd[1]); // 父进程立即关闭写端
     
     if (status == 0) {
-        kill(pid, SIGCONT); // 恢复运行 (因为使用了 POSIX_SPAWN_START_SUSPENDED)
-        NSLog(@"[SPAWN] RootHelper launched with %d targets (PID: %d)", (argCount - 2), pid);
+        NSLog(@"[SPAWN] In-Bundle RootHelper launched successfully (PID: %d, targets: %d)", pid, (argCount - 2));
         
-        // 异步读取管道，将 RootHelper 的 stdout 实时转发至前端 WebView 日志面板（低功耗 QOS_CLASS_UTILITY 轨，避开大核）
+        // 异步非阻塞读取管道，确保写端关闭时读端安全释放
         int readFd = pipefd[0];
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             FILE *stream = fdopen(readFd, "r");
@@ -774,12 +755,13 @@ static NSString* escapeForJS(NSString *input) {
             while (fgets(buffer, sizeof(buffer), stream) != NULL) {
                 @autoreleasepool {
                     NSString *line = [[NSString alloc] initWithUTF8String:buffer];
-                    // 去除行尾换行
+                    if (!line) {
+                        line = [[NSString alloc] initWithCString:buffer encoding:NSISOLatin1StringEncoding];
+                    }
                     line = [line stringByTrimmingCharactersInSet:[NSCharacterSet newlineCharacterSet]];
                     if (line.length == 0) continue;
                     
                     dispatch_async(dispatch_get_main_queue(), ^{
-                        // 安全转义字符，防止 JS 注入或解析语法错误引发 WebKit 崩溃
                         NSString *escaped = escapeForJS(line);
                         NSString *js = [NSString stringWithFormat:@"appendLog('%@', 'system');", escaped];
                         [self.webView evaluateJavaScript:js completionHandler:nil];
@@ -791,8 +773,13 @@ static NSString* escapeForJS(NSString *input) {
         
         return pid;
     } else {
-        NSLog(@"[ERROR] sandbox restricted.");
+        NSLog(@"[ERROR] posix_spawn failed with error code: %d", status);
         close(pipefd[0]);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSString *errMsg = [NSString stringWithFormat:@"[WARN] 后台特权助手派生状态码: %d (当前环境权限降级)", status];
+            NSString *js = [NSString stringWithFormat:@"appendLog('%@', 'warn');", errMsg];
+            [self.webView evaluateJavaScript:js completionHandler:nil];
+        });
         return 0;
     }
 }
@@ -1011,21 +998,13 @@ static NSString* escapeForJS(NSString *input) {
             NSLog(@"[FAILSAVE] 发现上次锁定后遭遇强杀或崩溃，正在执行底层自愈解锁...");
             NSString *bundleHelperPath = [[NSBundle mainBundle] pathForResource:@"RootHelper" ofType:nil];
             if (bundleHelperPath) {
-                NSString *helperPath = @"/var/mobile/RootHelper";
-                [[NSFileManager defaultManager] removeItemAtPath:helperPath error:nil];
-                if ([[NSFileManager defaultManager] copyItemAtPath:bundleHelperPath toPath:helperPath error:nil]) {
-                    chmod([helperPath UTF8String], 0755);
-                } else {
-                    helperPath = bundleHelperPath;
-                }
                 pid_t pid;
-                const char *argv[] = {[helperPath UTF8String], "unlock_keychain", NULL};
+                const char *argv[] = {[bundleHelperPath UTF8String], "unlock_keychain", NULL};
                 posix_spawnattr_t attr;
                 posix_spawnattr_init(&attr);
-                posix_spawnattr_setflags(&attr, POSIX_SPAWN_START_SUSPENDED);
-                int status = posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, NULL);
+                posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+                posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, NULL);
                 posix_spawnattr_destroy(&attr);
-                if (status == 0) kill(pid, SIGCONT);
             }
             writeLockState(NO);
         }
@@ -1062,32 +1041,13 @@ static NSString* escapeForJS(NSString *input) {
             NSLog(@"[FAILSAVE] 检测到应用退入后台，执行防死锁紧急解锁 Keychain！");
             NSString *bundleHelperPath = [[NSBundle mainBundle] pathForResource:@"RootHelper" ofType:nil];
             if (bundleHelperPath) {
-                NSString *helperPath = @"/var/mobile/RootHelper";
-                [[NSFileManager defaultManager] removeItemAtPath:helperPath error:nil];
-                if ([[NSFileManager defaultManager] copyItemAtPath:bundleHelperPath toPath:helperPath error:nil]) {
-                    chmod([helperPath UTF8String], 0755);
-                } else {
-                    helperPath = bundleHelperPath;
-                }
                 pid_t pid;
-                const char *argv[] = {[helperPath UTF8String], "unlock_keychain", NULL};
+                const char *argv[] = {[bundleHelperPath UTF8String], "unlock_keychain", NULL};
                 posix_spawnattr_t attr;
                 posix_spawnattr_init(&attr);
-                posix_spawnattr_setflags(&attr, POSIX_SPAWN_START_SUSPENDED);
-                #define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1
-                int (*set_persona_np)(const posix_spawnattr_t* __restrict, uid_t, uint32_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_np");
-                int (*set_persona_uid_np)(const posix_spawnattr_t* __restrict, uid_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_uid_np");
-                int (*set_persona_gid_np)(const posix_spawnattr_t* __restrict, uid_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_gid_np");
-                if (set_persona_np != NULL && set_persona_uid_np != NULL && set_persona_gid_np != NULL) {
-                    set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
-                    set_persona_uid_np(&attr, 0);
-                    set_persona_gid_np(&attr, 0);
-                } else {
-                    NSLog(@"[Safe] posix_spawnattr persona functions not found, skipping persona setup.");
-                }
-                int status = posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, NULL);
+                posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+                posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, NULL);
                 posix_spawnattr_destroy(&attr);
-                if (status == 0) kill(pid, SIGCONT);
             }
             writeLockState(NO);
         }
@@ -1103,32 +1063,13 @@ static NSString* escapeForJS(NSString *input) {
             NSLog(@"[FAILSAVE] 检测到应用即将被强制关闭，抢答执行紧急解锁 Keychain！");
             NSString *bundleHelperPath = [[NSBundle mainBundle] pathForResource:@"RootHelper" ofType:nil];
             if (bundleHelperPath) {
-                NSString *helperPath = @"/var/mobile/RootHelper";
-                [[NSFileManager defaultManager] removeItemAtPath:helperPath error:nil];
-                if ([[NSFileManager defaultManager] copyItemAtPath:bundleHelperPath toPath:helperPath error:nil]) {
-                    chmod([helperPath UTF8String], 0755);
-                } else {
-                    helperPath = bundleHelperPath;
-                }
                 pid_t pid;
-                const char *argv[] = {[helperPath UTF8String], "unlock_keychain", NULL};
+                const char *argv[] = {[bundleHelperPath UTF8String], "unlock_keychain", NULL};
                 posix_spawnattr_t attr;
                 posix_spawnattr_init(&attr);
-                posix_spawnattr_setflags(&attr, POSIX_SPAWN_START_SUSPENDED);
-                #define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1
-                int (*set_persona_np)(const posix_spawnattr_t* __restrict, uid_t, uint32_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_np");
-                int (*set_persona_uid_np)(const posix_spawnattr_t* __restrict, uid_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_uid_np");
-                int (*set_persona_gid_np)(const posix_spawnattr_t* __restrict, uid_t) = dlsym(RTLD_DEFAULT, "posix_spawnattr_set_persona_gid_np");
-                if (set_persona_np != NULL && set_persona_uid_np != NULL && set_persona_gid_np != NULL) {
-                    set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
-                    set_persona_uid_np(&attr, 0);
-                    set_persona_gid_np(&attr, 0);
-                } else {
-                    NSLog(@"[Safe] posix_spawnattr persona functions not found, skipping persona setup.");
-                }
-                int status = posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, NULL);
+                posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+                posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, NULL);
                 posix_spawnattr_destroy(&attr);
-                if (status == 0) kill(pid, SIGCONT);
             }
             writeLockState(NO);
         }

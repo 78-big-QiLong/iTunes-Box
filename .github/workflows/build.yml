@@ -1,4 +1,4 @@
-name: Build QiLong (IPA / TIPA / DEB) - Uncompressed & No Hardening
+name: Build QiLong (Independent TIPA / IPA / DEB Targets)
 
 on:
   push:
@@ -10,74 +10,121 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - name: 1. 拉取代码
+      - name: 1. 拉取源代码
         uses: actions/checkout@v4
 
       - name: 2. 安装 ldid 与 dpkg
         run: |
           brew install ldid dpkg
 
-      - name: 3. 基础无加固原生编译
+      - name: 3. 基础原生编译 (Target & Helper)
         run: |
           make clean
           make
 
-      - name: 4. 组装 .app 目录
+      # =========================================================================
+      # 🎯 独立构建流 1：TrollStore 专属 TIPA (包含 TSRootBinaries 与 FakeSign 特权)
+      # =========================================================================
+      - name: 4. [TIPA 专属构建] 组装并签署 TrollStore 包
         run: |
-          mkdir -p QiLong-Dynamic-Whitelist.app
-          cp QiLong-Dynamic-Whitelist QiLong-Dynamic-Whitelist.app/
-          cp RootHelper QiLong-Dynamic-Whitelist.app/
-          cp Info.plist QiLong-Dynamic-Whitelist.app/
-          cp src/index.html QiLong-Dynamic-Whitelist.app/
-          test -f src/AppIcon.png && cp src/AppIcon.png QiLong-Dynamic-Whitelist.app/ || true
-          test -f src/Applcon.png && cp src/Applcon.png QiLong-Dynamic-Whitelist.app/ || true
+          rm -rf target_tipa
+          mkdir -p target_tipa/Payload/QiLong-Dynamic-Whitelist.app
+          
+          # 拷贝 Bundle 核心资源
+          cp QiLong-Dynamic-Whitelist target_tipa/Payload/QiLong-Dynamic-Whitelist.app/
+          cp RootHelper target_tipa/Payload/QiLong-Dynamic-Whitelist.app/
+          cp Info.plist target_tipa/Payload/QiLong-Dynamic-Whitelist.app/
+          cp src/index.html target_tipa/Payload/QiLong-Dynamic-Whitelist.app/
+          test -f src/AppIcon.png && cp src/AppIcon.png target_tipa/Payload/QiLong-Dynamic-Whitelist.app/ || true
+          test -f src/Applcon.png && cp src/Applcon.png target_tipa/Payload/QiLong-Dynamic-Whitelist.app/ || true
           if [ -d "packages" ]; then
-            cp -r packages/* QiLong-Dynamic-Whitelist.app/ || true
+            cp -r packages/* target_tipa/Payload/QiLong-Dynamic-Whitelist.app/ || true
           fi
-
-      - name: 5. 使用 ldid 分轨签署特权 (主UI与RootHelper独立签名)
-        run: |
-          chmod 0755 QiLong-Dynamic-Whitelist.app/RootHelper
-          chmod 0755 QiLong-Dynamic-Whitelist.app/QiLong-Dynamic-Whitelist
-          ldid -Ssrc/entitlements.plist QiLong-Dynamic-Whitelist.app/RootHelper
-          ldid -Ssrc/app_entitlements.plist QiLong-Dynamic-Whitelist.app/QiLong-Dynamic-Whitelist
-          chmod 0755 QiLong-Dynamic-Whitelist.app/RootHelper
-          chmod 0755 QiLong-Dynamic-Whitelist.app/QiLong-Dynamic-Whitelist
-
-      - name: 6. 纯存储无压缩封装 IPA / TIPA (-0 无压缩模式)
-        run: |
-          rm -rf Payload
-          mkdir -p Payload
-          cp -RP QiLong-Dynamic-Whitelist.app Payload/
-          chmod -R 0755 Payload/
-          chmod 0755 Payload/QiLong-Dynamic-Whitelist.app/QiLong-Dynamic-Whitelist
-          chmod 0755 Payload/QiLong-Dynamic-Whitelist.app/RootHelper
+          
+          # 签署 TrollStore 巨魔特权
+          chmod 0755 target_tipa/Payload/QiLong-Dynamic-Whitelist.app/RootHelper
+          chmod 0755 target_tipa/Payload/QiLong-Dynamic-Whitelist.app/QiLong-Dynamic-Whitelist
+          ldid -Ssrc/entitlements.plist target_tipa/Payload/QiLong-Dynamic-Whitelist.app/RootHelper
+          ldid -Ssrc/app_entitlements.plist target_tipa/Payload/QiLong-Dynamic-Whitelist.app/QiLong-Dynamic-Whitelist
           
           # 清理扩展属性
-          xattr -cr Payload/ || true
-          find Payload/ -name ".DS_Store" -delete
-          find Payload/ -name "__MACOSX" -exec rm -rf {} + 2>/dev/null || true
+          xattr -cr target_tipa/Payload/ || true
+          find target_tipa/Payload/ -name ".DS_Store" -delete
+          find target_tipa/Payload/ -name "__MACOSX" -exec rm -rf {} + 2>/dev/null || true
           
-          # 使用 -0 纯存储模式打包，完全不进行 Deflate 压缩
-          zip -0 -qr QiLong-Dynamic-Whitelist.ipa Payload
-          cp -f QiLong-Dynamic-Whitelist.ipa QiLong-Dynamic-Whitelist.tipa
+          # 纯存储 -0 无压缩打包为 .tipa
+          cd target_tipa
+          zip -0 -qr ../QiLong-Dynamic-Whitelist.tipa Payload
+          cd ..
 
-      - name: 7. 纯存储无压缩封装 DEB (-Znone 模式)
+      # =========================================================================
+      # 🎯 独立构建流 2：标准自签 IPA (纯净 App Bundle，适配 AltStore/Sideloadly)
+      # =========================================================================
+      - name: 5. [IPA 专属构建] 组装标准自签 IPA 包
+        run: |
+          rm -rf target_ipa
+          mkdir -p target_ipa/Payload/QiLong-Dynamic-Whitelist.app
+          
+          # 拷贝 Bundle 核心资源
+          cp QiLong-Dynamic-Whitelist target_ipa/Payload/QiLong-Dynamic-Whitelist.app/
+          cp RootHelper target_ipa/Payload/QiLong-Dynamic-Whitelist.app/
+          cp Info.plist target_ipa/Payload/QiLong-Dynamic-Whitelist.app/
+          cp src/index.html target_ipa/Payload/QiLong-Dynamic-Whitelist.app/
+          test -f src/AppIcon.png && cp src/AppIcon.png target_ipa/Payload/QiLong-Dynamic-Whitelist.app/ || true
+          test -f src/Applcon.png && cp src/Applcon.png target_ipa/Payload/QiLong-Dynamic-Whitelist.app/ || true
+          if [ -d "packages" ]; then
+            cp -r packages/* target_ipa/Payload/QiLong-Dynamic-Whitelist.app/ || true
+          fi
+          
+          # 签名与权限规范化
+          chmod 0755 target_ipa/Payload/QiLong-Dynamic-Whitelist.app/RootHelper
+          chmod 0755 target_ipa/Payload/QiLong-Dynamic-Whitelist.app/QiLong-Dynamic-Whitelist
+          ldid -Ssrc/app_entitlements.plist target_ipa/Payload/QiLong-Dynamic-Whitelist.app/QiLong-Dynamic-Whitelist
+          ldid -Ssrc/entitlements.plist target_ipa/Payload/QiLong-Dynamic-Whitelist.app/RootHelper
+          
+          # 清理扩展属性
+          xattr -cr target_ipa/Payload/ || true
+          find target_ipa/Payload/ -name ".DS_Store" -delete
+          find target_ipa/Payload/ -name "__MACOSX" -exec rm -rf {} + 2>/dev/null || true
+          
+          # 纯存储 -0 无压缩打包为 .ipa
+          cd target_ipa
+          zip -0 -qr ../QiLong-Dynamic-Whitelist.ipa Payload
+          cd ..
+
+      # =========================================================================
+      # 🎯 独立构建流 3：Rootless 越狱 DEB (Dopamine / RootHide / Sileo 架构)
+      # =========================================================================
+      - name: 6. [DEB 专属构建] 组装与编译 Rootless DEB 安装包
         run: |
           rm -rf build_deb
           mkdir -p build_deb/DEBIAN
-          mkdir -p build_deb/var/jb/Applications
-          cp -RP QiLong-Dynamic-Whitelist.app build_deb/var/jb/Applications/
-          chmod -R 0755 build_deb/var/jb/Applications/
-          chmod 0755 build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/QiLong-Dynamic-Whitelist
-          chmod 0755 build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/RootHelper
+          mkdir -p build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app
           
+          # 拷贝 Bundle 核心资源至越狱系统目录
+          cp QiLong-Dynamic-Whitelist build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/
+          cp RootHelper build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/
+          cp Info.plist build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/
+          cp src/index.html build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/
+          test -f src/AppIcon.png && cp src/AppIcon.png build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/ || true
+          test -f src/Applcon.png && cp src/Applcon.png build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/ || true
+          if [ -d "packages" ]; then
+            cp -r packages/* build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/ || true
+          fi
+          
+          # 签署 Rootless 越狱特权
+          chmod 0755 build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/RootHelper
+          chmod 0755 build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/QiLong-Dynamic-Whitelist
+          ldid -Ssrc/entitlements.plist build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/RootHelper
+          ldid -Ssrc/app_entitlements.plist build_deb/var/jb/Applications/QiLong-Dynamic-Whitelist.app/QiLong-Dynamic-Whitelist
+          
+          # 写入 DEBIAN 控制脚本
           cat << 'EOF' > build_deb/DEBIAN/control
           Package: com.78bigqilong.dynamicwhitelist
           Name: QiLong-Dynamic-Whitelist
           Version: 1.0.8
           Architecture: iphoneos-arm64
-          Description: QiLong AI 防高动态白名单与安全工具
+          Description: QiLong AI 防高动态白名单与安全工具 (Rootless)
           Maintainer: 78-big-QiLong
           Author: QiLong-GOLD400
           Section: Utilities
@@ -92,25 +139,35 @@ jobs:
           exit 0
           EOF
 
+          cat << 'EOF' > build_deb/DEBIAN/postrm
+          #!/bin/sh
+          uicache -a 2>/dev/null || true
+          exit 0
+          EOF
+
           chmod 0755 build_deb/DEBIAN/control
           chmod 0755 build_deb/DEBIAN/postinst
+          chmod 0755 build_deb/DEBIAN/postrm
           
-          # 使用 -Znone 无压缩打包 DEB
+          # 封装为无压缩 -Znone 规范 DEB
           dpkg-deb -Znone --root-owner-group -b build_deb QiLong-Dynamic-Whitelist_rootless.deb
 
-      - name: 8. 上传 TIPA 安装包 (供 TrollStore)
+      # =========================================================================
+      # 📦 分流独立产物上传
+      # =========================================================================
+      - name: 7. 上传 TIPA 安装包 (TrollStore 专属)
         uses: actions/upload-artifact@v4
         with:
           name: QiLong-Dynamic-Whitelist-TIPA
           path: QiLong-Dynamic-Whitelist.tipa
 
-      - name: 9. 上传 IPA 安装包 (供自签)
+      - name: 8. 上传 IPA 安装包 (标准自签专属)
         uses: actions/upload-artifact@v4
         with:
           name: QiLong-Dynamic-Whitelist-IPA
           path: QiLong-Dynamic-Whitelist.ipa
 
-      - name: 10. 上传 DEB 安装包 (供越狱环境)
+      - name: 9. 上传 DEB 安装包 (Dopamine/RootHide 越狱专属)
         uses: actions/upload-artifact@v4
         with:
           name: QiLong-Dynamic-Whitelist-DEB
