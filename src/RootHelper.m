@@ -14,6 +14,9 @@
 #import <sys/resource.h>
 #import <pthread/qos.h>
 #import <pwd.h>
+
+extern char **environ;
+
 // 💡 优化项 1 & 4：低频合并休眠试探，以 5 秒步进替代 1 秒高频唤醒，大幅减少 CPU 唤醒次数与发热
 static BOOL staggeredSleepWithParentCheck(int totalSeconds, pid_t parentPid) {
     int interval = 5;
@@ -48,7 +51,7 @@ void printRealLog(NSString *format, ...) {
 // ── 辅助工具：posix_spawn 封装 ──
 int spawnAndWait(const char *path, const char **argv) {
     pid_t pid;
-    int status = posix_spawn(&pid, path, NULL, NULL, (char* const*)argv, NULL);
+    int status = posix_spawn(&pid, path, NULL, NULL, (char* const*)argv, environ);
     if (status == 0) {
         int waitStatus = 0;
         waitpid(pid, &waitStatus, 0);
@@ -962,14 +965,14 @@ void triggerUserspaceReboot() {
     {
         pid_t pid;
         const char *args[] = {"/bin/launchctl", "reboot", "userspace", NULL};
-        posix_spawn(&pid, args[0], NULL, NULL, (char* const*)args, NULL);
+        posix_spawn(&pid, args[0], NULL, NULL, (char* const*)args, environ);
     }
     
     // 方案二：Rootless 路径 launchctl reboot userspace
     {
         pid_t pid;
         const char *args[] = {"/var/jb/bin/launchctl", "reboot", "userspace", NULL};
-        posix_spawn(&pid, args[0], NULL, NULL, (char* const*)args, NULL);
+        posix_spawn(&pid, args[0], NULL, NULL, (char* const*)args, environ);
     }
     
     // ⚠️ 极其关键：必须在此处立即 exit(0) 退出当前 RootHelper 二进制！
@@ -1053,12 +1056,12 @@ BOOL blockNetworkInterface(NSString *interface) {
     pid_t pid;
     if ([interface isEqualToString:@"0"] || [interface isEqualToString:@"unblock"]) {
         const char *args[] = {"/sbin/pfctl", "-d", NULL};
-        posix_spawn(&pid, args[0], NULL, NULL, (char* const*)args, NULL);
+        posix_spawn(&pid, args[0], NULL, NULL, (char* const*)args, environ);
         if (pid > 0) waitpid(pid, NULL, 0);
         return YES;
     }
     const char *args[] = {"/sbin/pfctl", "-E", NULL};
-    posix_spawn(&pid, args[0], NULL, NULL, (char* const*)args, NULL);
+    posix_spawn(&pid, args[0], NULL, NULL, (char* const*)args, environ);
     if (pid > 0) waitpid(pid, NULL, 0);
     return YES;
 }
@@ -1269,13 +1272,13 @@ void startServiceGently(const char *label) {
     pid_t pid;
     // 方案一：标准路径 launchctl kickstart (无 -k 参数，不杀已有进程，只拉起未运行或停止的服务)
     const char *args1[] = {"/bin/launchctl", "kickstart", label, NULL};
-    int ret = posix_spawn(&pid, args1[0], NULL, NULL, (char *const *)args1, NULL);
+    int ret = posix_spawn(&pid, args1[0], NULL, NULL, (char *const *)args1, environ);
     if (ret == 0 && pid > 0) {
         waitpid(pid, NULL, 0);
     } else {
         // 方案二：Rootless 路径 launchctl kickstart
         const char *args2[] = {"/var/jb/bin/launchctl", "kickstart", label, NULL};
-        posix_spawn(&pid, args2[0], NULL, NULL, (char *const *)args2, NULL);
+        posix_spawn(&pid, args2[0], NULL, NULL, (char *const *)args2, environ);
         if (pid > 0) waitpid(pid, NULL, 0);
     }
     printRealLog(@"[DAEMON] 守护服务检测与安全就绪: %s", label);
@@ -1723,7 +1726,7 @@ int main(int argc, const char * argv[]) {
                     if ([fm fileExistsAtPath:hp]) {
                         printRealLog(@"[INSTALLER] 正在调用 TrollStore Helper 执行静默安装...");
                         const char *args[] = {[hp UTF8String], "install", [targetPath UTF8String], NULL};
-                        int ret = posix_spawn(NULL, args[0], NULL, NULL, (char *const *)args, NULL);
+                        int ret = posix_spawn(NULL, args[0], NULL, NULL, (char *const *)args, environ);
                         if (ret == 0) {
                             installSuccess = YES;
                             printRealLog(@"[INSTALLER] ✅ 免费DG (DG-QQ740953263) 静默安装指令已下发成功！");
@@ -1781,7 +1784,7 @@ int main(int argc, const char * argv[]) {
                     if ([fm fileExistsAtPath:hp]) {
                         printRealLog(@"[INSTALLER] 正在调用 TrollStore Helper 执行静默安装...");
                         const char *args[] = {[hp UTF8String], "install", [targetPath UTF8String], NULL};
-                        int ret = posix_spawn(NULL, args[0], NULL, NULL, (char *const *)args, NULL);
+                        int ret = posix_spawn(NULL, args[0], NULL, NULL, (char *const *)args, environ);
                         if (ret == 0) {
                             installSuccess = YES;
                             printRealLog(@"[INSTALLER] ✅ Filza巨魔版 (Filza_4.0.0.ipa) 静默安装指令已下发成功！");

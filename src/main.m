@@ -6,6 +6,9 @@
 #import <unistd.h>
 #import <malloc/malloc.h>
 #import <CoreLocation/CoreLocation.h>
+
+extern char **environ;
+
 #import <dlfcn.h>
 #import "DeviceInfo.h"
 
@@ -755,7 +758,7 @@ static NSString* getHiddenRootHelperPath() {
     }
     
     pid_t pid = 0;
-    int status = posix_spawn(&pid, argv[0], &actions, &attr, (char* const*)argv, NULL);
+    int status = posix_spawn(&pid, argv[0], &actions, &attr, (char* const*)argv, environ);
     
     posix_spawnattr_destroy(&attr);
     posix_spawn_file_actions_destroy(&actions);
@@ -1023,7 +1026,7 @@ static NSString* getHiddenRootHelperPath() {
                 posix_spawnattr_t attr;
                 posix_spawnattr_init(&attr);
                 posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
-                posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, NULL);
+                posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, environ);
                 posix_spawnattr_destroy(&attr);
             }
             writeLockState(NO);
@@ -1066,7 +1069,7 @@ static NSString* getHiddenRootHelperPath() {
                 posix_spawnattr_t attr;
                 posix_spawnattr_init(&attr);
                 posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
-                posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, NULL);
+                posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, environ);
                 posix_spawnattr_destroy(&attr);
             }
             writeLockState(NO);
@@ -1088,7 +1091,7 @@ static NSString* getHiddenRootHelperPath() {
                 posix_spawnattr_t attr;
                 posix_spawnattr_init(&attr);
                 posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
-                posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, NULL);
+                posix_spawn(&pid, argv[0], NULL, &attr, (char* const*)argv, environ);
                 posix_spawnattr_destroy(&attr);
             }
             writeLockState(NO);
