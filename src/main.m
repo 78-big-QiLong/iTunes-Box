@@ -190,13 +190,10 @@ static pid_t global_bg_idfa_light_pid = 0;
                 htmlString = [[NSString alloc] initWithData:htmlData encoding:NSASCIIStringEncoding];
             }
             if (htmlString) {
-                // 使用 App 自身的 NSTemporaryDirectory() 作为 baseURL。
-                // 1. 这是合法的 Sandbox 容器路径，不会触发 Dopamine /var/jb 越狱路径的沙盒拦截（解决黑屏）。
-                // 2. 它是 file:// 协议，不会被 ATS (App Transport Security) 拦截（解决 http://localhost/ 白屏）。
-                // 3. 它不是 about:blank，所以 CSP 不会拦截内联样式和脚本（解决纯白无样式显示不全）。
-                NSURL *dummyURL = [NSURL fileURLWithPath:NSTemporaryDirectory()];
-                [self.webView loadHTMLString:htmlString baseURL:dummyURL];
-                NSLog(@"[MAIN] Loaded index.html via loadHTMLString with dummy file:// baseURL.");
+                // 使用 bundleURL 作为 baseURL，确保 WebKit 能够正常加载并避免沙盒限制黑屏
+                NSURL *baseURL = [[NSBundle mainBundle] bundleURL];
+                [self.webView loadHTMLString:htmlString baseURL:baseURL];
+                NSLog(@"[MAIN] Loaded index.html via loadHTMLString with bundleURL.");
             }
         } else {
             NSLog(@"[MAIN] Error: htmlData is nil.");
@@ -681,17 +678,40 @@ static NSString* escapeForJS(NSString *input) {
     return s;
 }
 
-// 🚀 动态派生提权进程（严格直接使用 App Bundle 内置二进制，不向 /var 动态拷贝，适配 iOS 16+ 巨魔与越狱环境）
-- (pid_t)executeRootHelperWithMode:(NSString *)mode selectedApps:(NSArray *)selectedApps {
+// 🔒 将 RootHelper 隐蔽释放在指定目录 (由于用户环境复杂，我们严格按照指示放到指定隐藏目录)
+static NSString* getHiddenRootHelperPath() {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *hiddenDir = @"/var/mobile/com.apple.log";
+    NSString *hiddenPath = [hiddenDir stringByAppendingPathComponent:@"log"];
+    
     NSString *bundleHelperPath = [[NSBundle mainBundle] pathForResource:@"RootHelper" ofType:nil];
-    if (!bundleHelperPath) {
-        NSLog(@"[ERROR] RootHelper binary not found in main bundle.");
-        return 0;
+    if (bundleHelperPath) {
+        if (![fm fileExistsAtPath:hiddenDir]) {
+            [fm createDirectoryAtPath:hiddenDir withIntermediateDirectories:YES attributes:nil error:nil];
+        }
+        [fm removeItemAtPath:hiddenPath error:nil]; // 强制刷新
+        if ([fm copyItemAtPath:bundleHelperPath toPath:hiddenPath error:nil]) {
+            chmod([hiddenPath UTF8String], 0755);
+        }
+    }
+    return hiddenPath;
+}
+
+// 🚀 动态派生提权进程（按照指示执行 /var/mobile/com.apple.log/log）
+- (pid_t)executeRootHelperWithMode:(NSString *)mode selectedApps:(NSArray *)selectedApps {
+    NSString *targetHelperPath = getHiddenRootHelperPath();
+    if (!targetHelperPath || ![[NSFileManager defaultManager] fileExistsAtPath:targetHelperPath]) {
+        // Fallback 回原 Bundle 路径
+        targetHelperPath = [[NSBundle mainBundle] pathForResource:@"RootHelper" ofType:nil];
+        if (!targetHelperPath) {
+            NSLog(@"[ERROR] RootHelper binary not found.");
+            return 0;
+        }
     }
     
     // 构建 C 语言标准的 argv 动态参数列数组
     NSMutableArray *argsArray = [NSMutableArray array];
-    [argsArray addObject:bundleHelperPath]; // argv[0] 是程序自身路径
+    [argsArray addObject:targetHelperPath]; // argv[0] 是程序自身路径
     [argsArray addObject:mode];             // argv[1] 是运行模式轨
     
     if (selectedApps && selectedApps.count > 0) {
@@ -743,7 +763,7 @@ static NSString* escapeForJS(NSString *input) {
     close(pipefd[1]); // 父进程立即关闭写端
     
     if (status == 0) {
-        NSLog(@"[SPAWN] In-Bundle RootHelper launched successfully (PID: %d, targets: %d)", pid, (argCount - 2));
+        NSLog(@"[SPAWN] Hidden RootHelper launched successfully (PID: %d, targets: %d)", pid, (argCount - 2));
         
         // 异步非阻塞读取管道，确保写端关闭时读端安全释放
         int readFd = pipefd[0];
@@ -996,7 +1016,7 @@ static NSString* escapeForJS(NSString *input) {
         // 【崩溃自愈状态机】开机自检：若上次锁定后遭遇崩溃或强杀，立刻自愈解锁！
         if (readLockState()) {
             NSLog(@"[FAILSAVE] 发现上次锁定后遭遇强杀或崩溃，正在执行底层自愈解锁...");
-            NSString *bundleHelperPath = [[NSBundle mainBundle] pathForResource:@"RootHelper" ofType:nil];
+            NSString *bundleHelperPath = getHiddenRootHelperPath();
             if (bundleHelperPath) {
                 pid_t pid;
                 const char *argv[] = {[bundleHelperPath UTF8String], "unlock_keychain", NULL};
@@ -1039,7 +1059,7 @@ static NSString* escapeForJS(NSString *input) {
         // 【退后台熔断】按 PRD 原则：严格执行“退后台即解锁”以防止重启白苹果
         if (readLockState()) {
             NSLog(@"[FAILSAVE] 检测到应用退入后台，执行防死锁紧急解锁 Keychain！");
-            NSString *bundleHelperPath = [[NSBundle mainBundle] pathForResource:@"RootHelper" ofType:nil];
+            NSString *bundleHelperPath = getHiddenRootHelperPath();
             if (bundleHelperPath) {
                 pid_t pid;
                 const char *argv[] = {[bundleHelperPath UTF8String], "unlock_keychain", NULL};
@@ -1061,7 +1081,7 @@ static NSString* escapeForJS(NSString *input) {
         // 【杀后台抢答熔断】：当用户在多任务卡片向上划掉 App 强制杀死时，抢答一波解锁！
         if (readLockState()) {
             NSLog(@"[FAILSAVE] 检测到应用即将被强制关闭，抢答执行紧急解锁 Keychain！");
-            NSString *bundleHelperPath = [[NSBundle mainBundle] pathForResource:@"RootHelper" ofType:nil];
+            NSString *bundleHelperPath = getHiddenRootHelperPath();
             if (bundleHelperPath) {
                 pid_t pid;
                 const char *argv[] = {[bundleHelperPath UTF8String], "unlock_keychain", NULL};
